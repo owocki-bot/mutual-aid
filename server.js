@@ -15,6 +15,48 @@ const TREASURY = '0xccD7200024A8B5708d381168ec2dB0DC587af83F';
 const getProvider = () => new ethers.JsonRpcProvider(process.env.RPC_URL || 'https://sepolia.base.org');
 const getWallet = () => new ethers.Wallet(process.env.TREASURY_PRIVATE_KEY, getProvider());
 
+
+// ============================================================================
+// WHITELIST MIDDLEWARE
+// ============================================================================
+
+let _whitelistCache = null;
+let _whitelistCacheTime = 0;
+const WHITELIST_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+
+async function fetchWhitelist() {
+  const now = Date.now();
+  if (_whitelistCache && (now - _whitelistCacheTime) < WHITELIST_CACHE_TTL) {
+    return _whitelistCache;
+  }
+  try {
+    const res = await fetch('https://www.owockibot.xyz/api/whitelist');
+    const data = await res.json();
+    _whitelistCache = new Set(data.map(e => (e.address || e).toLowerCase()));
+    _whitelistCacheTime = now;
+    return _whitelistCache;
+  } catch (err) {
+    console.error('Whitelist fetch failed:', err.message);
+    if (_whitelistCache) return _whitelistCache;
+    return new Set();
+  }
+}
+
+function requireWhitelist(addressField = 'address') {
+  return async (req, res, next) => {
+    const addr = req.body?.[addressField] || req.body?.creator || req.body?.participant || req.body?.sender || req.body?.from || req.body?.address;
+    if (!addr) {
+      return res.status(400).json({ error: 'Address required' });
+    }
+    const whitelist = await fetchWhitelist();
+    if (!whitelist.has(addr.toLowerCase())) {
+      return res.status(403).json({ error: 'Invite-only. Tag @owockibot on X to request access.' });
+    }
+    next();
+  };
+}
+
+
 app.get('/', (req, res) => {
   res.json({
     name: 'Mutual Aid Network',
@@ -70,7 +112,7 @@ app.get('/agent', (req, res) => {
 });
 
 // Create network
-app.post('/networks', (req, res) => {
+app.post('/networks', requireWhitelist(), (req, res) => {
   const { name, description } = req.body;
   if (!name) return res.status(400).json({ error: 'Name required' });
   
@@ -97,7 +139,7 @@ app.get('/networks/:id', (req, res) => {
 });
 
 // Join network
-app.post('/networks/:id/join', (req, res) => {
+app.post('/networks/:id/join', requireWhitelist(), (req, res) => {
   const network = networks.get(req.params.id);
   if (!network) return res.status(404).json({ error: 'Network not found' });
   
@@ -122,7 +164,7 @@ app.post('/networks/:id/join', (req, res) => {
 });
 
 // Contribute to pool
-app.post('/networks/:id/contribute', (req, res) => {
+app.post('/networks/:id/contribute', requireWhitelist(), (req, res) => {
   const network = networks.get(req.params.id);
   if (!network) return res.status(404).json({ error: 'Network not found' });
   
@@ -141,7 +183,7 @@ app.post('/networks/:id/contribute', (req, res) => {
 });
 
 // Request help
-app.post('/networks/:id/request', (req, res) => {
+app.post('/networks/:id/request', requireWhitelist(), (req, res) => {
   const network = networks.get(req.params.id);
   if (!network) return res.status(404).json({ error: 'Network not found' });
   
@@ -167,7 +209,7 @@ app.post('/networks/:id/request', (req, res) => {
 });
 
 // Offer help
-app.post('/networks/:id/offer', (req, res) => {
+app.post('/networks/:id/offer', requireWhitelist(), (req, res) => {
   const network = networks.get(req.params.id);
   if (!network) return res.status(404).json({ error: 'Network not found' });
   
@@ -200,7 +242,7 @@ app.get('/networks/:id/requests', (req, res) => {
 });
 
 // Fulfill request from pool
-app.post('/networks/:id/requests/:reqId/fulfill', async (req, res) => {
+app.post('/networks/:id/requests/:reqId/fulfill', requireWhitelist(), async (req, res) => {
   const network = networks.get(req.params.id);
   if (!network) return res.status(404).json({ error: 'Network not found' });
   
@@ -249,7 +291,7 @@ app.post('/networks/:id/requests/:reqId/fulfill', async (req, res) => {
 });
 
 // Redistribute based on need (equal distribution to all with open requests)
-app.post('/networks/:id/redistribute', async (req, res) => {
+app.post('/networks/:id/redistribute', requireWhitelist(), async (req, res) => {
   const network = networks.get(req.params.id);
   if (!network) return res.status(404).json({ error: 'Network not found' });
   
